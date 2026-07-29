@@ -382,7 +382,7 @@ elif seccion == "Materiales":
                 st.success("Odoo conectado (credenciales guardadas en Secrets). Solo mete el código de la pieza.")
                 odoo_url, odoo_db, odoo_user, odoo_pass = odoo.get_credentials_from_secrets()
 
-                codigo_producto = st.text_input("Código del producto en Odoo (default_code)", key="codigo_prod_secret")
+                codigo_producto = st.text_input("Código o nombre del producto en Odoo", key="codigo_prod_secret")
                 if st.button("Traer BOM de Odoo", key="btn_odoo_secret"):
                     if not codigo_producto:
                         st.error("Falta el código del producto.")
@@ -427,7 +427,7 @@ elif seccion == "Materiales":
                     else:
                         st.error("Faltan datos de conexión.")
 
-                codigo_producto = st.text_input("Código del producto en Odoo (default_code)")
+                codigo_producto = st.text_input("Código o nombre del producto en Odoo")
                 if st.button("Traer BOM de Odoo"):
                     if not (odoo_url and odoo_db and odoo_user and odoo_pass and codigo_producto):
                         st.error("Faltan datos de conexión o el código del producto.")
