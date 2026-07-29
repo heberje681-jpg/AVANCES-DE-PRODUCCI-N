@@ -67,7 +67,36 @@ def init_db():
     );
     """)
     conn.commit()
+    _migrar_columnas_faltantes(conn)
     return conn
+
+
+def _migrar_columnas_faltantes(conn):
+    """Si la base ya existía de una versión anterior de la app (con menos
+    columnas), le agrega las que falten en vez de tronar. CREATE TABLE IF
+    NOT EXISTS no toca tablas que ya existen, así que esto cubre ese caso."""
+    columnas_esperadas = {
+        "proyectos": {
+            "unidad": "TEXT DEFAULT 'pza'",
+            "fecha": "TEXT",
+            "responsable": "TEXT",
+            "mo_odoo": "TEXT",
+            "activo": "INTEGER DEFAULT 1",
+        },
+        "etapas": {
+            "orden": "INTEGER",
+            "keywords_odoo": "TEXT DEFAULT ''",
+        },
+        "materiales": {
+            "kg_pza": "REAL DEFAULT 0",
+        },
+    }
+    for tabla, columnas in columnas_esperadas.items():
+        existentes = {fila[1] for fila in conn.execute(f"PRAGMA table_info({tabla})").fetchall()}
+        for columna, tipo in columnas.items():
+            if columna not in existentes:
+                conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+    conn.commit()
 
 
 # Etapas por default según el proceso real de Marva
