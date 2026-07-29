@@ -149,10 +149,100 @@ def calcular_dashboard(df: pd.DataFrame):
 # UI
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="Avance de Producción", layout="wide")
+st.set_page_config(page_title="MARVA · Avance de Producción", layout="wide", page_icon="⚙️")
 conn = init_db()
 
-st.sidebar.title("📊 Avance de Producción")
+# ---------------------------------------------------------------------------
+# Identidad visual Marva: grafito + acero + naranja de seguridad
+# ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+    --marva-bg: #14181C;
+    --marva-panel: #1D242B;
+    --marva-panel-2: #232B33;
+    --marva-steel: #2E86AB;
+    --marva-orange: #F26430;
+    --marva-text: #E8EDF1;
+    --marva-muted: #8C99A6;
+    --marva-border: #2C363F;
+}
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+h1, h2, h3, .marva-plate, .marva-plate * { font-family: 'Barlow Condensed', sans-serif; }
+
+.stApp { background-color: var(--marva-bg); }
+section[data-testid="stSidebar"] { background-color: var(--marva-panel); border-right: 1px solid var(--marva-border); }
+
+/* Placa tipo nameplate industrial */
+.marva-plate {
+    background: linear-gradient(120deg, #1A2027 0%, #232B33 60%, #1A2027 100%);
+    border: 1px solid var(--marva-border);
+    border-left: 6px solid var(--marva-orange);
+    border-radius: 6px;
+    padding: 18px 26px;
+    margin-bottom: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.marva-plate .brand { display: flex; align-items: baseline; gap: 14px; }
+.marva-plate .brand-name {
+    font-weight: 700; font-size: 30px; letter-spacing: 2px; color: var(--marva-text);
+}
+.marva-plate .brand-tag {
+    font-size: 15px; letter-spacing: 3px; text-transform: uppercase; color: var(--marva-orange);
+}
+.marva-plate .brand-sub { font-family: 'Inter'; font-size: 13px; color: var(--marva-muted); margin-top: 2px; }
+
+/* Metrics como tarjetas de acero */
+div[data-testid="stMetric"] {
+    background-color: var(--marva-panel-2);
+    border: 1px solid var(--marva-border);
+    border-radius: 6px;
+    padding: 12px 16px 10px 16px;
+    border-top: 3px solid var(--marva-steel);
+}
+div[data-testid="stMetricLabel"] { color: var(--marva-muted) !important; text-transform: uppercase; letter-spacing: 1px; font-size: 12px !important; }
+div[data-testid="stMetricValue"] { color: var(--marva-text) !important; font-family: 'Barlow Condensed'; }
+
+/* Botones */
+.stButton > button {
+    background-color: var(--marva-steel);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+.stButton > button:hover { background-color: #256E8C; color: white; }
+.stFormSubmitButton > button { background-color: var(--marva-orange); color: white; border: none; font-weight: 600; }
+.stFormSubmitButton > button:hover { background-color: #D6541F; color: white; }
+
+/* Expanders / tabs */
+div[data-testid="stExpander"] { background-color: var(--marva-panel-2); border: 1px solid var(--marva-border); border-radius: 6px; }
+button[data-baseweb="tab"] { font-family: 'Barlow Condensed'; font-size: 16px; letter-spacing: 0.5px; }
+
+/* Barras de progreso -> acento naranja */
+div[data-testid="stProgress"] > div > div > div { background-color: var(--marva-orange) !important; }
+
+hr { border-color: var(--marva-border); }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="marva-plate">
+    <div class="brand">
+        <span class="brand-name">MARVA</span>
+        <span class="brand-tag">Producción</span>
+    </div>
+    <div class="brand-sub">Seguimiento de avance de fabricación · piso de planta</div>
+</div>
+""", unsafe_allow_html=True)
+
+st.sidebar.markdown("### ⚙️ Avance de Producción")
 seccion = st.sidebar.radio(
     "Ir a:",
     ["Proyectos activos", "Nuevo proyecto", "Materiales", "Captura de avance", "Dashboard"],
