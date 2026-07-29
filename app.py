@@ -282,6 +282,36 @@ if seccion == "Proyectos activos":
             hide_index=True,
         )
 
+        st.divider()
+        st.subheader("Administrar proyectos")
+        st.caption(
+            "**Archivar** lo saca de la lista de activos pero no borra nada (lo puedes recuperar). "
+            "**Eliminar** lo borra por completo, junto con sus materiales y avances — no se puede deshacer."
+        )
+        proyecto_admin = st.selectbox(
+            "Proyecto a administrar",
+            proyectos_df["id"],
+            format_func=lambda x: proyectos_df.set_index("id").loc[x, "nombre"],
+            key="proyecto_admin",
+        )
+        nombre_admin = proyectos_df.set_index("id").loc[proyecto_admin, "nombre"]
+
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            if st.button("🗄️ Archivar proyecto"):
+                conn.execute("UPDATE proyectos SET activo = 0 WHERE id = ?", (int(proyecto_admin),))
+                conn.commit()
+                st.success(f"'{nombre_admin}' archivado.")
+                st.rerun()
+
+        with ac2:
+            confirmar = st.checkbox(f"Confirmo que quiero eliminar '{nombre_admin}' definitivamente")
+            if st.button("🗑️ Eliminar definitivamente", disabled=not confirmar):
+                conn.execute("DELETE FROM proyectos WHERE id = ?", (int(proyecto_admin),))
+                conn.commit()
+                st.success(f"'{nombre_admin}' eliminado.")
+                st.rerun()
+
 # ---------------------------------------------------------------------------
 # Nuevo proyecto
 # ---------------------------------------------------------------------------
