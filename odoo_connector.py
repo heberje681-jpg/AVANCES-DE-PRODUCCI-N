@@ -8,6 +8,25 @@ ninguna libreria extra (viene incluida en Python).
 import xmlrpc.client
 
 
+def get_credentials_from_secrets():
+    """Si hay credenciales guardadas en .streamlit/secrets.toml (local) o en
+    Settings > Secrets de Streamlit Cloud, las regresa. Si no hay, regresa
+    4 None y la app cae de vuelta a pedirlas a mano."""
+    try:
+        import streamlit as st
+        if "odoo" in st.secrets:
+            o = st.secrets["odoo"]
+            return o.get("url"), o.get("db"), o.get("user"), o.get("password")
+    except Exception:
+        pass
+    return None, None, None, None
+
+
+def is_odoo_configured() -> bool:
+    url, db, user, password = get_credentials_from_secrets()
+    return all([url, db, user, password])
+
+
 def probar_conexion(url: str, db: str, user: str, password: str):
     """Regresa (ok: bool, mensaje: str). No lanza excepcion."""
     try:
