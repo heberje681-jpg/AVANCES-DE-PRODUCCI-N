@@ -10,13 +10,30 @@ import xmlrpc.client
 
 def get_credentials_from_secrets():
     """Si hay credenciales guardadas en .streamlit/secrets.toml (local) o en
-    Settings > Secrets de Streamlit Cloud, las regresa. Si no hay, regresa
-    4 None y la app cae de vuelta a pedirlas a mano."""
+    Settings > Secrets de Streamlit Cloud, las regresa. Acepta dos formatos:
+
+        [odoo]                          o          ODOO_URL = "..."
+        url = "..."                                 ODOO_DB = "..."
+        db = "..."                                   ODOO_USER = "..."
+        user = "..."                                 ODOO_PASSWORD = "..."
+        password = "..."
+
+    Si no hay nada guardado, regresa 4 None y la app cae de vuelta a
+    pedirlas a mano."""
     try:
         import streamlit as st
+
         if "odoo" in st.secrets:
             o = st.secrets["odoo"]
             return o.get("url"), o.get("db"), o.get("user"), o.get("password")
+
+        if "ODOO_URL" in st.secrets:
+            return (
+                st.secrets.get("ODOO_URL"),
+                st.secrets.get("ODOO_DB"),
+                st.secrets.get("ODOO_USER"),
+                st.secrets.get("ODOO_PASSWORD"),
+            )
     except Exception:
         pass
     return None, None, None, None
