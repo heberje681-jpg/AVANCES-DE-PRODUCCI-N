@@ -128,3 +128,65 @@ def fetch_bom_from_odoo(url: str, db: str, user: str, password: str, codigo_prod
         })
 
     return materiales
+
+
+def fetch_avance_por_centro(url: str, db: str, user: str, password: str, orden_referencia: str):
+    """Trae el avance real de una Orden de Fabricacion (mrp.production) en Odoo,
+    agrupado por centro de trabajo (mrp.workorder.workcenter_id).
+
+    orden_referencia: el nombre/referencia de la OF en Odoo (ej. 'WH/MO/00123'),
+    o el codigo del producto si prefieres buscarla por producto (toma la OF
+    mas reciente en curso de ese producto).
+
+    Regresa: {"cantidad_total": float, "por_centro": {"Corte": 12.0, "Doblez": 8.0, ...}}
+    Lanza excepcion con mensaje claro si algo falla.
+    """
+    common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
+    uid = common.authenticate(db, user, password, {})
+    if not uid:
+        raise ValueError("No se pudo autenticar en Odoo. Revisa las credenciales.")
+
+    models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
+
+    # 1) buscar la orden de fabricacion por referencia exacta
+    ordenes = models.execute_kw(
+        db, uid, password, "mrp.production", "search_read",
+        [[["name", "=", orden_referencia]]],
+        {"fields": ["id", "name", "product_qty", "state"], "limit": 1},
+    )
+
+    # 2) si no hay match exacto, intenta por nombre de producto (la mas reciente)
+    if not ordenes:
+        ordenes = models.execute_kw(
+            db, uid, password, "mrp.production", "search_read",
+            [[["product_id.name", "ilike", orden_referencia]]],
+            {"fields": ["id", "name", "product_qty", "state"], "order": "id desc", "limit": 1},
+        )
+
+    if not ordenes:
+        raise ValueError(
+            f"No se encontró ninguna orden de fabricación con referencia o producto '{orden_referencia}'."
+        )
+
+    orden = ordenes[0]
+
+    workorders = models.execute_kw(
+        db, uid, password, "mrp.workorder", "search_read",
+        [[["production_id", "=", orden["id"]]]],
+        {"fields": ["workcenter_id", "qty_produced", "state"]},
+    )
+    if not workorders:
+        raise ValueError(
+            f"La orden '{orden['name']}' no tiene operaciones/centros de trabajo capturados en Odoo."
+        )
+
+    por_centro = {}
+    for wo in workorders:
+        centro = wo["workcenter_id"][1] if wo.get("workcenter_id") else "Sin centro"
+        por_centro[centro] = por_centro.get(centro, 0.0) + (wo.get("qty_produced") or 0.0)
+
+    return {
+        "orden": orden["name"],
+        "cantidad_total": orden["product_qty"],
+        "por_centro": por_centro,
+    }
