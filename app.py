@@ -444,8 +444,12 @@ with st.expander("🔄 Sincronizar avance con Odoo (por orden de fabricación)")
         st.warning("Configura tus credenciales de Odoo en 'Materiales necesarios' → 'Traer BOM de Odoo', o en Secrets.")
         odoo_url = odoo_db = odoo_user = odoo_pass = None
 
-    mo_ref = st.text_input("Referencia de la Orden de Fabricación en Odoo (ej. WH/MO/00123)",
-                            value=proyecto["mo_odoo"] or "")
+    mo_ref = st.text_input(
+        "Orden de fabricación en Odoo (o pega el mismo código/nombre que usaste para la BOM)",
+        value=proyecto["mo_odoo"] or "",
+        help="Acepta la referencia exacta de la orden (WH/MO/00123), el código del producto, "
+             "o el texto tal cual lo copias de Odoo. Si no hay match exacto de orden, toma la más reciente de ese producto.",
+    )
 
     if st.button("Sincronizar avance"):
         if not (odoo_url and odoo_db and odoo_user and odoo_pass and mo_ref):
