@@ -257,49 +257,76 @@ elif seccion == "Materiales":
             "Proyecto", proyectos_df["id"], format_func=lambda x: proyectos_df.set_index("id").loc[x, "nombre"]
         )
 
-        with st.expander("🔌 Traer BOM de Odoo"):
-            st.caption(
-                "Mete tus datos de conexión de Odoo (se quedan solo en esta sesión, no se guardan "
-                "en ningún archivo) y trae la BOM del producto directo, sin capturarla a mano."
-            )
-            oc1, oc2 = st.columns(2)
-            odoo_url = oc1.text_input("URL de Odoo", value=st.session_state.get("odoo_url", ""),
-                                       placeholder="https://tuempresa.odoo.com")
-            odoo_db = oc2.text_input("Base de datos", value=st.session_state.get("odoo_db", ""))
-            oc3, oc4 = st.columns(2)
-            odoo_user = oc3.text_input("Usuario", value=st.session_state.get("odoo_user", ""))
-            odoo_pass = oc4.text_input("Contraseña / API key", type="password")
+        with st.expander("🔌 Traer BOM de Odoo", expanded=odoo.is_odoo_configured()):
+            if odoo.is_odoo_configured():
+                st.success("Odoo conectado (credenciales guardadas en Secrets). Solo mete el código de la pieza.")
+                odoo_url, odoo_db, odoo_user, odoo_pass = odoo.get_credentials_from_secrets()
 
-            if st.button("Probar conexión"):
-                if odoo_url and odoo_db and odoo_user and odoo_pass:
-                    ok, msg = odoo.probar_conexion(odoo_url, odoo_db, odoo_user, odoo_pass)
-                    st.session_state["odoo_url"] = odoo_url
-                    st.session_state["odoo_db"] = odoo_db
-                    st.session_state["odoo_user"] = odoo_user
-                    (st.success if ok else st.error)(msg)
-                else:
-                    st.error("Faltan datos de conexión.")
-
-            codigo_producto = st.text_input("Código del producto en Odoo (default_code)")
-            if st.button("Traer BOM de Odoo"):
-                if not (odoo_url and odoo_db and odoo_user and odoo_pass and codigo_producto):
-                    st.error("Faltan datos de conexión o el código del producto.")
-                else:
-                    try:
-                        materiales_odoo = odoo.fetch_bom_from_odoo(
-                            odoo_url, odoo_db, odoo_user, odoo_pass, codigo_producto
-                        )
-                        for mat in materiales_odoo:
-                            conn.execute(
-                                "INSERT INTO materiales (proyecto_id, descripcion, cantidad_total, kg_pza) "
-                                "VALUES (?, ?, ?, ?)",
-                                (proyecto_sel, mat["descripcion"], mat["cantidad_total"], mat["kg_pza"]),
+                codigo_producto = st.text_input("Código del producto en Odoo (default_code)", key="codigo_prod_secret")
+                if st.button("Traer BOM de Odoo", key="btn_odoo_secret"):
+                    if not codigo_producto:
+                        st.error("Falta el código del producto.")
+                    else:
+                        try:
+                            materiales_odoo = odoo.fetch_bom_from_odoo(
+                                odoo_url, odoo_db, odoo_user, odoo_pass, codigo_producto
                             )
-                        conn.commit()
-                        st.success(f"Se importaron {len(materiales_odoo)} materiales desde Odoo.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"No se pudo traer la BOM: {e}")
+                            for mat in materiales_odoo:
+                                conn.execute(
+                                    "INSERT INTO materiales (proyecto_id, descripcion, cantidad_total, kg_pza) "
+                                    "VALUES (?, ?, ?, ?)",
+                                    (proyecto_sel, mat["descripcion"], mat["cantidad_total"], mat["kg_pza"]),
+                                )
+                            conn.commit()
+                            st.success(f"Se importaron {len(materiales_odoo)} materiales desde Odoo.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"No se pudo traer la BOM: {e}")
+            else:
+                st.caption(
+                    "Mete tus datos de conexión de Odoo (se quedan solo en esta sesión, no se guardan "
+                    "en ningún archivo) y trae la BOM del producto directo, sin capturarla a mano. "
+                    "Tip: si guardas estos mismos datos en Settings > Secrets de Streamlit Cloud "
+                    "(sección [odoo]), no te los vuelve a pedir."
+                )
+                oc1, oc2 = st.columns(2)
+                odoo_url = oc1.text_input("URL de Odoo", value=st.session_state.get("odoo_url", ""),
+                                           placeholder="https://tuempresa.odoo.com")
+                odoo_db = oc2.text_input("Base de datos", value=st.session_state.get("odoo_db", ""))
+                oc3, oc4 = st.columns(2)
+                odoo_user = oc3.text_input("Usuario", value=st.session_state.get("odoo_user", ""))
+                odoo_pass = oc4.text_input("Contraseña / API key", type="password")
+
+                if st.button("Probar conexión"):
+                    if odoo_url and odoo_db and odoo_user and odoo_pass:
+                        ok, msg = odoo.probar_conexion(odoo_url, odoo_db, odoo_user, odoo_pass)
+                        st.session_state["odoo_url"] = odoo_url
+                        st.session_state["odoo_db"] = odoo_db
+                        st.session_state["odoo_user"] = odoo_user
+                        (st.success if ok else st.error)(msg)
+                    else:
+                        st.error("Faltan datos de conexión.")
+
+                codigo_producto = st.text_input("Código del producto en Odoo (default_code)")
+                if st.button("Traer BOM de Odoo"):
+                    if not (odoo_url and odoo_db and odoo_user and odoo_pass and codigo_producto):
+                        st.error("Faltan datos de conexión o el código del producto.")
+                    else:
+                        try:
+                            materiales_odoo = odoo.fetch_bom_from_odoo(
+                                odoo_url, odoo_db, odoo_user, odoo_pass, codigo_producto
+                            )
+                            for mat in materiales_odoo:
+                                conn.execute(
+                                    "INSERT INTO materiales (proyecto_id, descripcion, cantidad_total, kg_pza) "
+                                    "VALUES (?, ?, ?, ?)",
+                                    (proyecto_sel, mat["descripcion"], mat["cantidad_total"], mat["kg_pza"]),
+                                )
+                            conn.commit()
+                            st.success(f"Se importaron {len(materiales_odoo)} materiales desde Odoo.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"No se pudo traer la BOM: {e}")
 
         st.markdown("**Cargar por archivo (CSV o Excel)**")
         st.caption("Columnas esperadas: descripcion, cantidad_total, kg_pza (kg_pza es opcional)")
