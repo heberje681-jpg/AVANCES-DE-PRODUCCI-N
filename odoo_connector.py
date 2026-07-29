@@ -149,11 +149,12 @@ def fetch_avance_por_centro(url: str, db: str, user: str, password: str, orden_r
     """Trae el avance real de una Orden de Fabricacion (mrp.production) en Odoo,
     agrupado por centro de trabajo (mrp.workorder.workcenter_id).
 
-    orden_referencia: el nombre/referencia de la OF en Odoo (ej. 'WH/MO/00123'),
-    o el codigo del producto si prefieres buscarla por producto (toma la OF
-    mas reciente en curso de ese producto).
+    orden_referencia acepta lo mismo que fetch_bom_from_odoo: el nombre exacto
+    de la OF (ej. 'WH/MO/00123'), el codigo del producto, o el texto tal cual
+    lo copias de Odoo ('[ACST35] Nombre completo'). Si no hay match exacto por
+    nombre de OF, busca la orden mas reciente (no cancelada) de ese producto.
 
-    Regresa: {"cantidad_total": float, "por_centro": {"Corte": 12.0, "Doblez": 8.0, ...}}
+    Regresa: {"orden": str, "cantidad_total": float, "por_centro": {"Corte": 12.0, ...}}
     Lanza excepcion con mensaje claro si algo falla.
     """
     common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
@@ -163,24 +164,34 @@ def fetch_avance_por_centro(url: str, db: str, user: str, password: str, orden_r
 
     models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
 
-    # 1) buscar la orden de fabricacion por referencia exacta
+    codigo, nombre = _parse_codigo_y_nombre(orden_referencia)
+
+    # 1) buscar la orden de fabricacion por referencia exacta (ej. 'WH/MO/00123')
     ordenes = models.execute_kw(
         db, uid, password, "mrp.production", "search_read",
         [[["name", "=", orden_referencia]]],
         {"fields": ["id", "name", "product_qty", "state"], "limit": 1},
     )
 
-    # 2) si no hay match exacto, intenta por nombre de producto (la mas reciente)
+    # 2) si no, intenta por codigo de producto (la mas reciente que no este cancelada)
     if not ordenes:
         ordenes = models.execute_kw(
             db, uid, password, "mrp.production", "search_read",
-            [[["product_id.name", "ilike", orden_referencia]]],
+            [[["product_id.default_code", "=", codigo], ["state", "!=", "cancel"]]],
+            {"fields": ["id", "name", "product_qty", "state"], "order": "id desc", "limit": 1},
+        )
+
+    # 3) si tampoco, intenta por nombre de producto (la mas reciente)
+    if not ordenes:
+        ordenes = models.execute_kw(
+            db, uid, password, "mrp.production", "search_read",
+            [[["product_id.name", "ilike", nombre], ["state", "!=", "cancel"]]],
             {"fields": ["id", "name", "product_qty", "state"], "order": "id desc", "limit": 1},
         )
 
     if not ordenes:
         raise ValueError(
-            f"No se encontró ninguna orden de fabricación con referencia o producto '{orden_referencia}'."
+            f"No se encontró ninguna orden de fabricación con referencia, código o producto '{orden_referencia}'."
         )
 
     orden = ordenes[0]
