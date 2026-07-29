@@ -2,8 +2,10 @@
 Avance de Producción — MARVA
 App genérica de captura y seguimiento de avance de fabricación.
 
-Todo vive en una sola pantalla por proyecto (como el Excel original),
-en vez de estar repartido en varias páginas.
+El avance se mide a nivel PIEZA por etapa (cuántas piezas de las que
+hay que producir ya pasaron por Habilitado, Armado, Soldadura,
+Pintura...), no por material — los materiales son solo la lista de
+insumos que se necesitan (referencia), no algo que "avanza" por etapa.
 """
 import sqlite3
 from datetime import date
@@ -56,13 +58,11 @@ def init_db():
         kg_pza REAL DEFAULT 0,
         FOREIGN KEY (proyecto_id) REFERENCES proyectos(id) ON DELETE CASCADE
     );
-    CREATE TABLE IF NOT EXISTS avances (
+    CREATE TABLE IF NOT EXISTS avance_etapas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        material_id INTEGER NOT NULL,
         etapa_id INTEGER NOT NULL,
         cantidad_avanzada REAL NOT NULL,
         fecha TEXT NOT NULL,
-        FOREIGN KEY (material_id) REFERENCES materiales(id) ON DELETE CASCADE,
         FOREIGN KEY (etapa_id) REFERENCES etapas(id) ON DELETE CASCADE
     );
     """)
@@ -72,9 +72,8 @@ def init_db():
 
 
 def _migrar_columnas_faltantes(conn):
-    """Si la base ya existía de una versión anterior de la app (con menos
-    columnas), le agrega las que falten en vez de tronar. CREATE TABLE IF
-    NOT EXISTS no toca tablas que ya existen, así que esto cubre ese caso."""
+    """Si la base ya existía de una versión anterior de la app, le agrega
+    las columnas que falten en vez de tronar."""
     columnas_esperadas = {
         "proyectos": {
             "unidad": "TEXT DEFAULT 'pza'",
@@ -108,58 +107,43 @@ ETAPAS_DEFAULT = [
 ]
 
 
-def upsert_avance(conn, material_id, etapa_id, cantidad, fecha):
+def upsert_avance_etapa(conn, etapa_id, cantidad, fecha):
     existing = conn.execute(
-        "SELECT id FROM avances WHERE material_id = ? AND etapa_id = ? AND fecha = ?",
-        (material_id, etapa_id, fecha),
+        "SELECT id FROM avance_etapas WHERE etapa_id = ? AND fecha = ?", (etapa_id, fecha)
     ).fetchone()
     if existing:
-        conn.execute("UPDATE avances SET cantidad_avanzada = ? WHERE id = ?", (cantidad, existing[0]))
+        conn.execute("UPDATE avance_etapas SET cantidad_avanzada = ? WHERE id = ?", (cantidad, existing[0]))
     else:
         conn.execute(
-            "INSERT INTO avances (material_id, etapa_id, cantidad_avanzada, fecha) VALUES (?, ?, ?, ?)",
-            (material_id, etapa_id, cantidad, fecha),
+            "INSERT INTO avance_etapas (etapa_id, cantidad_avanzada, fecha) VALUES (?, ?, ?)",
+            (etapa_id, cantidad, fecha),
         )
 
 
-def get_avance_actual(conn, proyecto_id):
+def get_avance_etapas(conn, proyecto_id):
     sql = """
-    SELECT m.id AS material_id, m.descripcion, m.cantidad_total, m.kg_pza,
-           e.id AS etapa_id, e.nombre AS etapa, e.peso AS peso_etapa, e.orden,
+    SELECT e.id AS etapa_id, e.nombre AS etapa, e.peso, e.orden, e.keywords_odoo,
            COALESCE(a.cantidad_avanzada, 0) AS cantidad_avanzada
-    FROM materiales m
-    CROSS JOIN etapas e ON e.proyecto_id = m.proyecto_id
+    FROM etapas e
     LEFT JOIN (
-        SELECT material_id, etapa_id, cantidad_avanzada, fecha
-        FROM avances a1
-        WHERE fecha = (
-            SELECT MAX(fecha) FROM avances a2
-            WHERE a2.material_id = a1.material_id AND a2.etapa_id = a1.etapa_id
-        )
-    ) a ON a.material_id = m.id AND a.etapa_id = e.id
-    WHERE m.proyecto_id = ?
-    ORDER BY e.orden, m.id
+        SELECT etapa_id, cantidad_avanzada, fecha
+        FROM avance_etapas a1
+        WHERE fecha = (SELECT MAX(fecha) FROM avance_etapas a2 WHERE a2.etapa_id = a1.etapa_id)
+    ) a ON a.etapa_id = e.id
+    WHERE e.proyecto_id = ?
+    ORDER BY e.orden
     """
     return pd.read_sql_query(sql, conn, params=(proyecto_id,))
 
 
-def calcular_dashboard(df):
-    """% ponderado por KG (o por cantidad si no hay kg_pza), igual que el Excel original."""
-    if df.empty:
-        return pd.DataFrame(), 0.0
-    df = df.copy()
-    df["kg_total"] = df["cantidad_total"] * df["kg_pza"]
-    df["base"] = df["kg_total"].where(df["kg_pza"] > 0, df["cantidad_total"])
-    df["avanzado_base"] = df["cantidad_avanzada"] * df["base"] / df["cantidad_total"].replace(0, pd.NA)
-    df["avanzado_base"] = df["avanzado_base"].fillna(0)
-    por_etapa = (
-        df.groupby(["etapa_id", "etapa", "peso_etapa", "orden"], as_index=False)
-        .agg(base_total=("base", "sum"), avanzado_total=("avanzado_base", "sum"))
-    )
-    por_etapa["pct_etapa"] = (por_etapa["avanzado_total"] / por_etapa["base_total"].replace(0, pd.NA)).fillna(0)
-    por_etapa = por_etapa.sort_values("orden")
-    pct_total = float((por_etapa["pct_etapa"] * por_etapa["peso_etapa"]).sum()) / 100.0
-    return por_etapa, pct_total
+def calcular_dashboard(df_etapas, cantidad_total_proyecto):
+    """% simple: piezas avanzadas / piezas totales, ponderado por el peso de cada etapa."""
+    if df_etapas.empty or not cantidad_total_proyecto:
+        return df_etapas.assign(pct_etapa=0.0), 0.0
+    df = df_etapas.copy()
+    df["pct_etapa"] = (df["cantidad_avanzada"] / cantidad_total_proyecto).clip(upper=1.0)
+    pct_total = float((df["pct_etapa"] * df["peso"]).sum()) / 100.0
+    return df, pct_total
 
 
 def gauge(valor, titulo):
@@ -194,50 +178,33 @@ conn = init_db()
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
-
 :root {
-    --marva-bg: #0E1620;
-    --marva-panel: #16202B;
-    --marva-panel-2: #1C2733;
-    --marva-navy: #0F2A47;
-    --marva-gold: #D9A441;
-    --marva-text: #E8EDF1;
-    --marva-muted: #8C99A6;
-    --marva-border: #263341;
+    --marva-bg: #0E1620; --marva-panel: #16202B; --marva-panel-2: #1C2733;
+    --marva-navy: #0F2A47; --marva-gold: #D9A441; --marva-text: #E8EDF1;
+    --marva-muted: #8C99A6; --marva-border: #263341;
 }
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 h1, h2, h3, .marva-plate, .marva-plate * { font-family: 'Barlow Condensed', sans-serif; }
 .stApp { background-color: var(--marva-bg); }
 section[data-testid="stSidebar"] { background-color: var(--marva-panel); border-right: 1px solid var(--marva-border); }
-
 .marva-plate {
     background: linear-gradient(120deg, #0F1B27 0%, #16202B 60%, #0F1B27 100%);
-    border: 1px solid var(--marva-border);
-    border-left: 6px solid var(--marva-gold);
-    border-radius: 6px;
-    padding: 16px 24px;
-    margin-bottom: 18px;
-    display: flex; align-items: center; justify-content: space-between;
+    border: 1px solid var(--marva-border); border-left: 6px solid var(--marva-gold); border-radius: 6px;
+    padding: 16px 24px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between;
 }
 .marva-plate .brand-name { font-weight: 700; font-size: 28px; letter-spacing: 2px; color: var(--marva-text); }
 .marva-plate .brand-tag { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--marva-gold); margin-left: 12px; }
 .marva-plate .brand-sub { font-family: 'Inter'; font-size: 13px; color: var(--marva-muted); }
-
 div[data-testid="stMetric"] {
-    background-color: var(--marva-panel-2);
-    border: 1px solid var(--marva-border);
-    border-radius: 6px;
-    padding: 10px 14px 8px 14px;
-    border-top: 3px solid var(--marva-gold);
+    background-color: var(--marva-panel-2); border: 1px solid var(--marva-border); border-radius: 6px;
+    padding: 10px 14px 8px 14px; border-top: 3px solid var(--marva-gold);
 }
 div[data-testid="stMetricLabel"] { color: var(--marva-muted) !important; text-transform: uppercase; letter-spacing: 1px; font-size: 12px !important; }
 div[data-testid="stMetricValue"] { color: var(--marva-text) !important; font-family: 'Barlow Condensed'; }
-
 .stButton > button { background-color: var(--marva-navy); color: white; border: 1px solid var(--marva-gold); border-radius: 5px; font-weight: 600; }
 .stButton > button:hover { background-color: #163756; color: white; }
 .stFormSubmitButton > button { background-color: var(--marva-gold); color: #14181C; border: none; font-weight: 700; }
 .stFormSubmitButton > button:hover { background-color: #C4933A; }
-
 div[data-testid="stExpander"] { background-color: var(--marva-panel-2); border: 1px solid var(--marva-border); border-radius: 6px; }
 div[data-testid="stProgress"] > div > div > div { background-color: var(--marva-gold) !important; }
 hr { border-color: var(--marva-border); }
@@ -257,7 +224,6 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 
 proyectos_df = pd.read_sql_query("SELECT * FROM proyectos WHERE activo = 1 ORDER BY id DESC", conn)
-
 st.sidebar.markdown("### 🌾 Proyectos")
 
 if proyectos_df.empty:
@@ -270,7 +236,7 @@ else:
 with st.sidebar.expander("➕ Nuevo proyecto / pieza", expanded=proyectos_df.empty):
     with st.form("nuevo_proyecto_form"):
         nombre = st.text_input("Nombre de la pieza")
-        cantidad_total = st.number_input("Cantidad a producir", min_value=0.0, step=1.0)
+        cantidad_total = st.number_input("Cantidad a producir (piezas)", min_value=0.0, step=1.0)
         unidad = st.text_input("Unidad", value="pzas")
         responsable = st.text_input("Responsable")
         ahogada = st.checkbox("Pieza ahogada en concreto (pintura = solo fondo gris)")
@@ -302,15 +268,13 @@ if not proyecto_id:
     st.stop()
 
 proyecto = proyectos_df.set_index("id").loc[proyecto_id]
-etapas_df = pd.read_sql_query("SELECT * FROM etapas WHERE proyecto_id = ? ORDER BY orden", conn, params=(proyecto_id,))
-etapas = etapas_df.to_dict("records")
+etapas_avance = get_avance_etapas(conn, proyecto_id)
+etapas_avance, pct_total = calcular_dashboard(etapas_avance, proyecto["cantidad_total"])
+etapas = etapas_avance.to_dict("records")
 
 # ---------------------------------------------------------------------------
-# Encabezado del proyecto
+# Encabezado
 # ---------------------------------------------------------------------------
-
-avance_df = get_avance_actual(conn, proyecto_id)
-resumen_etapas, pct_total = calcular_dashboard(avance_df)
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Pieza", proyecto["nombre"])
@@ -321,16 +285,17 @@ c4.metric("Avance total", f"{pct_total*100:.1f}%")
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Etapas / pesos / mapeo a centros de trabajo de Odoo (colapsado)
+# Etapas / pesos / centros de trabajo (colapsado)
 # ---------------------------------------------------------------------------
 
 with st.expander("⚙️ Etapas, pesos y centros de trabajo de Odoo"):
     st.caption(
-        "El peso % de cada etapa se usa para ponderar el avance total. Las 'palabras clave' son los "
-        "nombres (o parte de ellos) de los centros de trabajo en Odoo que corresponden a esa etapa — "
-        "así la sincronización sabe a cuál etapa suma cada operación."
+        "El peso % de cada etapa pondera el avance total. Las 'palabras clave' son los nombres (o "
+        "parte de ellos) de los centros de trabajo en Odoo que corresponden a esa etapa."
     )
-    etapas_editable = pd.DataFrame(etapas)[["id", "nombre", "peso", "keywords_odoo"]]
+    etapas_editable = etapas_avance[["etapa_id", "etapa", "peso", "keywords_odoo"]].rename(
+        columns={"etapa_id": "id", "etapa": "nombre"}
+    )
     etapas_editadas = st.data_editor(
         etapas_editable, use_container_width=True, hide_index=True, disabled=["id"], key="etapas_editor"
     )
@@ -349,10 +314,14 @@ with st.expander("⚙️ Etapas, pesos y centros de trabajo de Odoo"):
             st.rerun()
 
 # ---------------------------------------------------------------------------
-# Importar materiales (manual / archivo / Odoo BOM) — colapsado
+# Materiales (referencia / BOM) — informativo, ya no maneja avance
 # ---------------------------------------------------------------------------
 
-with st.expander("📦 Agregar materiales"):
+with st.expander("📦 Materiales necesarios (referencia, no afecta el % de avance)"):
+    st.caption(
+        "Esta lista es solo de consulta — qué insumos se necesitan para fabricar la pieza. "
+        "El avance de producción se captura por etapa, más abajo."
+    )
     imp_tab1, imp_tab2, imp_tab3 = st.tabs(["Manual", "Archivo (CSV/Excel)", "Traer BOM de Odoo"])
 
     with imp_tab1:
@@ -422,20 +391,57 @@ with st.expander("📦 Agregar materiales"):
                 except Exception as e:
                     st.error(f"No se pudo traer la BOM: {e}")
 
+    materiales_df = pd.read_sql_query("SELECT * FROM materiales WHERE proyecto_id = ? ORDER BY id", conn, params=(proyecto_id,))
+    if not materiales_df.empty:
+        st.dataframe(
+            materiales_df[["descripcion", "cantidad_total", "kg_pza"]].rename(
+                columns={"descripcion": "Material", "cantidad_total": "Cantidad", "kg_pza": "Kg/pza"}
+            ),
+            use_container_width=True, hide_index=True,
+        )
+
 # ---------------------------------------------------------------------------
-# Sincronizar AVANCE con Odoo (por centro de trabajo / orden de fabricación)
+# Captura de avance por etapa — el corazón de la app
 # ---------------------------------------------------------------------------
 
-with st.expander("🔄 Sincronizar avance con Odoo (por orden de fabricación)", expanded=False):
+st.subheader("Avance por etapa")
+st.caption(f"De {proyecto['cantidad_total']:g} {proyecto['unidad']} a producir, ¿cuántas ya pasaron por cada etapa?")
+
+with st.form("captura_avance_form"):
+    valores_nuevos = {}
+    for et in etapas:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            valores_nuevos[et["etapa_id"]] = st.number_input(
+                f"{et['etapa']} (peso {et['peso']:.0f}%)",
+                min_value=0.0, max_value=float(proyecto["cantidad_total"]),
+                value=float(et["cantidad_avanzada"]), step=1.0,
+                key=f"avance_{et['etapa_id']}",
+            )
+        with col2:
+            pct_et = min(valores_nuevos[et["etapa_id"]] / proyecto["cantidad_total"], 1.0) * 100 if proyecto["cantidad_total"] else 0
+            st.metric("% etapa", f"{pct_et:.0f}%", label_visibility="collapsed")
+
+    if st.form_submit_button("💾 Guardar avance"):
+        hoy = str(date.today())
+        for etapa_id, valor in valores_nuevos.items():
+            upsert_avance_etapa(conn, etapa_id, valor, hoy)
+        conn.commit()
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# Sincronizar avance con Odoo (por orden de fabricación)
+# ---------------------------------------------------------------------------
+
+with st.expander("🔄 Sincronizar avance con Odoo (por orden de fabricación)"):
     st.caption(
-        "Trae cuánto llevas avanzado directo de la Orden de Fabricación en Odoo, agrupado por centro de "
-        "trabajo, y lo reparte entre las etapas según las palabras clave que configuraste arriba. "
-        "Aplica el mismo % a todos los materiales de esa etapa."
+        "Trae cuántas piezas ha completado cada centro de trabajo en Odoo para esta Orden de "
+        "Fabricación, y las reparte entre tus etapas según las palabras clave de arriba."
     )
     if odoo.is_odoo_configured():
         odoo_url, odoo_db, odoo_user, odoo_pass = odoo.get_credentials_from_secrets()
     else:
-        st.warning("Configura tus credenciales de Odoo en la sección 'Agregar materiales' → 'Traer BOM de Odoo', o en Secrets.")
+        st.warning("Configura tus credenciales de Odoo en 'Materiales necesarios' → 'Traer BOM de Odoo', o en Secrets.")
         odoo_url = odoo_db = odoo_user = odoo_pass = None
 
     mo_ref = st.text_input("Referencia de la Orden de Fabricación en Odoo (ej. WH/MO/00123)",
@@ -450,111 +456,45 @@ with st.expander("🔄 Sincronizar avance con Odoo (por orden de fabricación)",
                 conn.execute("UPDATE proyectos SET mo_odoo = ? WHERE id = ?", (mo_ref, proyecto_id))
 
                 por_centro = resultado["por_centro"]
-                cantidad_total_orden = resultado["cantidad_total"] or proyecto["cantidad_total"]
-                materiales = pd.read_sql_query("SELECT * FROM materiales WHERE proyecto_id = ?", conn, params=(proyecto_id,))
                 hoy = str(date.today())
-
                 resumen_sync = []
                 for et in etapas:
                     kw_list = [k.strip().lower() for k in (et["keywords_odoo"] or "").split(",") if k.strip()]
-                    qty_etapa = sum(
-                        v for centro, v in por_centro.items()
-                        if any(kw in centro.lower() for kw in kw_list)
-                    )
-                    pct = min(qty_etapa / cantidad_total_orden, 1.0) if cantidad_total_orden else 0.0
-                    resumen_sync.append((et["nombre"], qty_etapa, pct * 100))
-                    for _, mat in materiales.iterrows():
-                        cantidad_avanzada = pct * mat["cantidad_total"]
-                        upsert_avance(conn, int(mat["id"]), int(et["id"]), cantidad_avanzada, hoy)
+                    qty_etapa = sum(v for centro, v in por_centro.items() if any(kw in centro.lower() for kw in kw_list))
+                    qty_etapa = min(qty_etapa, proyecto["cantidad_total"])
+                    upsert_avance_etapa(conn, et["etapa_id"], qty_etapa, hoy)
+                    resumen_sync.append((et["etapa"], qty_etapa))
 
                 conn.commit()
                 st.success(f"Sincronizado con la orden '{resultado['orden']}'.")
-                st.dataframe(pd.DataFrame(resumen_sync, columns=["Etapa", "Piezas avanzadas (Odoo)", "% aplicado"]),
+                st.dataframe(pd.DataFrame(resumen_sync, columns=["Etapa", "Piezas avanzadas (Odoo)"]),
                              hide_index=True, use_container_width=True)
                 st.rerun()
             except Exception as e:
                 st.error(f"No se pudo sincronizar: {e}")
 
 # ---------------------------------------------------------------------------
-# Tabla única: materiales + captura de avance por etapa (estilo Excel)
-# ---------------------------------------------------------------------------
-
-st.subheader("Materiales y avance por etapa")
-
-materiales_df = pd.read_sql_query("SELECT * FROM materiales WHERE proyecto_id = ? ORDER BY id", conn, params=(proyecto_id,))
-
-if materiales_df.empty:
-    st.info("Todavía no hay materiales. Ábrelo en '📦 Agregar materiales' arriba.")
-else:
-    tabla = materiales_df[["id", "descripcion", "cantidad_total", "kg_pza"]].copy()
-    tabla = tabla.rename(columns={"descripcion": "Material", "cantidad_total": "Cant. Total", "kg_pza": "Kg/pza"})
-
-    for et in etapas:
-        avance_et = avance_df[avance_df["etapa_id"] == et["id"]][["material_id", "cantidad_avanzada"]]
-        avance_et = avance_et.rename(columns={"cantidad_avanzada": et["nombre"]})
-        tabla = tabla.merge(avance_et, left_on="id", right_on="material_id", how="left").drop(columns=["material_id"])
-        tabla[et["nombre"]] = tabla[et["nombre"]].fillna(0)
-
-    tabla_editada = st.data_editor(
-        tabla, use_container_width=True, hide_index=True, disabled=["id"],
-        num_rows="dynamic", key="tabla_materiales_editor",
-    )
-
-    if st.button("💾 Guardar cambios"):
-        ids_originales = set(tabla["id"].dropna().astype(int))
-        ids_editados = set(tabla_editada["id"].dropna().astype(int))
-        for mid in ids_originales - ids_editados:
-            conn.execute("DELETE FROM materiales WHERE id = ?", (int(mid),))
-
-        hoy = str(date.today())
-        for _, row in tabla_editada.iterrows():
-            if pd.isna(row["id"]):
-                if not row["Material"] or not row["Cant. Total"]:
-                    continue
-                cur = conn.execute(
-                    "INSERT INTO materiales (proyecto_id, descripcion, cantidad_total, kg_pza) VALUES (?,?,?,?)",
-                    (proyecto_id, row["Material"], row["Cant. Total"], row["Kg/pza"] or 0),
-                )
-                mid = cur.lastrowid
-            else:
-                mid = int(row["id"])
-                conn.execute(
-                    "UPDATE materiales SET descripcion=?, cantidad_total=?, kg_pza=? WHERE id=?",
-                    (row["Material"], row["Cant. Total"], row["Kg/pza"] or 0, mid),
-                )
-            for et in etapas:
-                valor = row.get(et["nombre"], 0) or 0
-                upsert_avance(conn, mid, et["id"], valor, hoy)
-
-        conn.commit()
-        st.success("Guardado.")
-        st.rerun()
-
-# ---------------------------------------------------------------------------
-# Dashboard (en la misma página)
+# Dashboard
 # ---------------------------------------------------------------------------
 
 st.divider()
 st.subheader("Dashboard")
 
-if materiales_df.empty:
-    st.info("Sin materiales todavía — no hay nada que mostrar.")
-else:
-    dg1, dg2 = st.columns([1, 2])
-    with dg1:
-        st.plotly_chart(gauge(pct_total, "Avance total"), use_container_width=True)
-    with dg2:
-        fig_bar = go.Figure(go.Bar(
-            x=resumen_etapas["etapa"], y=resumen_etapas["pct_etapa"] * 100,
-            text=[f"{v:.1f}%" for v in resumen_etapas["pct_etapa"] * 100],
-            textposition="outside", marker_color="#D9A441",
-        ))
-        fig_bar.update_layout(yaxis_range=[0, 100], height=220, margin=dict(l=20, r=20, t=20, b=20),
-                               paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EDF1")
-        st.plotly_chart(fig_bar, use_container_width=True)
+dg1, dg2 = st.columns([1, 2])
+with dg1:
+    st.plotly_chart(gauge(pct_total, "Avance total"), use_container_width=True)
+with dg2:
+    fig_bar = go.Figure(go.Bar(
+        x=etapas_avance["etapa"], y=etapas_avance["pct_etapa"] * 100,
+        text=[f"{v:.1f}%" for v in etapas_avance["pct_etapa"] * 100],
+        textposition="outside", marker_color="#D9A441",
+    ))
+    fig_bar.update_layout(yaxis_range=[0, 100], height=220, margin=dict(l=20, r=20, t=20, b=20),
+                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EDF1")
+    st.plotly_chart(fig_bar, use_container_width=True)
 
-    faltante = proyecto["cantidad_total"] * (1 - pct_total)
-    st.metric("Falta por completar (equivalente ponderado)", f"{faltante:.0f} {proyecto['unidad']}")
+faltante = proyecto["cantidad_total"] * (1 - pct_total)
+st.metric("Piezas equivalentes que faltan (ponderado)", f"{faltante:.1f} {proyecto['unidad']}")
 
 # ---------------------------------------------------------------------------
 # Administrar proyecto
