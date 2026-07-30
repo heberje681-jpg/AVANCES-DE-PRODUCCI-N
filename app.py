@@ -100,10 +100,10 @@ def _migrar_columnas_faltantes(conn):
 
 # Etapas por default según el proceso real de Marva
 ETAPAS_DEFAULT = [
-    ("HABILITADO", 30, "cizalla,sierra,dobladora,pantografo,barreno,roscad,corte"),
+    ("HABILITADO", 30, "excalibur,pantografo,metalero,roladora,dobladora,sierra,taladro,cizalla,tarraja"),
     ("ARMADO", 20, "armado,puntear"),
     ("SOLDADURA", 30, "soldadora,soldadura"),
-    ("PINTURA", 20, "preparacion,fondo,pintura"),
+    ("PINTURA", 20, "pintura,preparacion,fondo"),
 ]
 
 
@@ -224,6 +224,28 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 
 proyectos_df = pd.read_sql_query("SELECT * FROM proyectos WHERE activo = 1 ORDER BY id DESC", conn)
+
+if not proyectos_df.empty:
+    with st.expander("📊 Vista general de todos los proyectos activos", expanded=False):
+        filas_resumen = []
+        for _, p in proyectos_df.iterrows():
+            et_p = get_avance_etapas(conn, p["id"])
+            _, pct_p = calcular_dashboard(et_p, p["cantidad_total"])
+            filas_resumen.append({
+                "Proyecto": p["nombre"],
+                "Cantidad": f"{p['cantidad_total']:g} {p['unidad']}",
+                "Responsable": p["responsable"] or "—",
+                "% Avance": pct_p,
+            })
+        resumen_general_df = pd.DataFrame(filas_resumen)
+        st.dataframe(
+            resumen_general_df,
+            column_config={
+                "% Avance": st.column_config.ProgressColumn("% Avance", min_value=0, max_value=1, format="%.0f%%")
+            },
+            use_container_width=True, hide_index=True,
+        )
+
 st.sidebar.markdown("### 🌾 Proyectos")
 
 if proyectos_df.empty:
