@@ -199,20 +199,44 @@ def fetch_avance_por_centro(url: str, db: str, user: str, password: str, orden_r
     workorders = models.execute_kw(
         db, uid, password, "mrp.workorder", "search_read",
         [[["production_id", "=", orden["id"]]]],
-        {"fields": ["workcenter_id", "qty_produced", "state"]},
+        {"fields": ["name", "workcenter_id", "state"], "order": "id asc"},
     )
     if not workorders:
         raise ValueError(
             f"La orden '{orden['name']}' no tiene operaciones/centros de trabajo capturados en Odoo."
         )
 
-    por_centro = {}
-    for wo in workorders:
-        centro = wo["workcenter_id"][1] if wo.get("workcenter_id") else "Sin centro"
-        por_centro[centro] = por_centro.get(centro, 0.0) + (wo.get("qty_produced") or 0.0)
+    # Marva no captura cantidades por operacion, solo si ya se hizo o no (state).
+    # Como Odoo no deja pasar a la siguiente estacion sin terminar la anterior,
+    # el estado 'done' de una operacion equivale a esa estacion completa para
+    # TODA la orden (todas las piezas de ese lote).
+    operaciones = [
+        {
+            "operacion": wo.get("name") or "Sin nombre",
+            "centro": wo["workcenter_id"][1] if wo.get("workcenter_id") else "Sin centro",
+            "estado": wo.get("state"),
+            "hecha": wo.get("state") == "done",
+        }
+        for wo in workorders
+    ]
+
+    por_centro_total = {}
+    por_centro_hechas = {}
+    for op in operaciones:
+        centro = op["centro"]
+        por_centro_total[centro] = por_centro_total.get(centro, 0) + 1
+        if op["hecha"]:
+            por_centro_hechas[centro] = por_centro_hechas.get(centro, 0) + 1
+
+    # fraccion de operaciones terminadas por centro (0 a 1)
+    por_centro_pct = {
+        centro: por_centro_hechas.get(centro, 0) / total
+        for centro, total in por_centro_total.items()
+    }
 
     return {
         "orden": orden["name"],
         "cantidad_total": orden["product_qty"],
-        "por_centro": por_centro,
+        "operaciones": operaciones,
+        "por_centro_pct": por_centro_pct,
     }
