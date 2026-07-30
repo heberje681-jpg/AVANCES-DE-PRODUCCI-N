@@ -100,9 +100,9 @@ def _migrar_columnas_faltantes(conn):
 
 # Etapas por default según el proceso real de Marva
 ETAPAS_DEFAULT = [
-    ("HABILITADO", 30, "corte,doblez,roscado,barrenado"),
-    ("ARMADO", 20, "puntear,armado"),
-    ("SOLDADURA", 30, "soldadura"),
+    ("HABILITADO", 30, "cizalla,sierra,dobladora,pantografo,barreno,roscad,corte"),
+    ("ARMADO", 20, "armado,puntear"),
+    ("SOLDADURA", 30, "soldadora,soldadura"),
     ("PINTURA", 20, "preparacion,fondo,pintura"),
 ]
 
@@ -430,13 +430,14 @@ with st.form("captura_avance_form"):
         st.rerun()
 
 # ---------------------------------------------------------------------------
-# Sincronizar avance con Odoo (por orden de fabricación)
+# Ver operaciones y sincronizar avance con Odoo (por orden de fabricación)
 # ---------------------------------------------------------------------------
 
-with st.expander("🔄 Sincronizar avance con Odoo (por orden de fabricación)"):
+with st.expander("🔄 Operaciones de Odoo (ver checklist / sincronizar avance)"):
     st.caption(
-        "Trae cuántas piezas ha completado cada centro de trabajo en Odoo para esta Orden de "
-        "Fabricación, y las reparte entre tus etapas según las palabras clave de arriba."
+        "Marva no captura cantidades por operación en Odoo, solo si cada estación ya se hizo o no "
+        "(y no te deja pasar a la siguiente sin terminar la anterior). Esto trae ese checklist real, "
+        "y si quieres, reparte el % de cada etapa según cuántas de sus estaciones ya están hechas."
     )
     if odoo.is_odoo_configured():
         odoo_url, odoo_db, odoo_user, odoo_pass = odoo.get_credentials_from_secrets()
@@ -451,31 +452,50 @@ with st.expander("🔄 Sincronizar avance con Odoo (por orden de fabricación)")
              "o el texto tal cual lo copias de Odoo. Si no hay match exacto de orden, toma la más reciente de ese producto.",
     )
 
-    if st.button("Sincronizar avance"):
+    bc1, bc2 = st.columns(2)
+    ver_operaciones = bc1.button("👁️ Ver operaciones (solo consulta)")
+    sincronizar = bc2.button("💾 Ver y aplicar avance a las etapas")
+
+    if ver_operaciones or sincronizar:
         if not (odoo_url and odoo_db and odoo_user and odoo_pass and mo_ref):
             st.error("Faltan datos de conexión o la referencia de la orden.")
         else:
             try:
                 resultado = odoo.fetch_avance_por_centro(odoo_url, odoo_db, odoo_user, odoo_pass, mo_ref)
                 conn.execute("UPDATE proyectos SET mo_odoo = ? WHERE id = ?", (mo_ref, proyecto_id))
-
-                por_centro = resultado["por_centro"]
-                hoy = str(date.today())
-                resumen_sync = []
-                for et in etapas:
-                    kw_list = [k.strip().lower() for k in (et["keywords_odoo"] or "").split(",") if k.strip()]
-                    qty_etapa = sum(v for centro, v in por_centro.items() if any(kw in centro.lower() for kw in kw_list))
-                    qty_etapa = min(qty_etapa, proyecto["cantidad_total"])
-                    upsert_avance_etapa(conn, et["etapa_id"], qty_etapa, hoy)
-                    resumen_sync.append((et["etapa"], qty_etapa))
-
                 conn.commit()
-                st.success(f"Sincronizado con la orden '{resultado['orden']}'.")
-                st.dataframe(pd.DataFrame(resumen_sync, columns=["Etapa", "Piezas avanzadas (Odoo)"]),
-                             hide_index=True, use_container_width=True)
-                st.rerun()
+
+                st.markdown(f"**Orden: {resultado['orden']}**")
+                ops_df = pd.DataFrame(resultado["operaciones"])[["operacion", "centro", "estado"]]
+                ops_df["estado"] = ops_df["estado"].map(
+                    {"done": "✅ Hecha", "progress": "🔧 En proceso", "ready": "⏳ Pendiente", "pending": "⏳ Pendiente"}
+                ).fillna(ops_df["estado"])
+                st.dataframe(
+                    ops_df.rename(columns={"operacion": "Operación", "centro": "Centro de trabajo", "estado": "Estado"}),
+                    hide_index=True, use_container_width=True,
+                )
+
+                if sincronizar:
+                    por_centro_pct = resultado["por_centro_pct"]
+                    hoy = str(date.today())
+                    resumen_sync = []
+                    for et in etapas:
+                        kw_list = [k.strip().lower() for k in (et["keywords_odoo"] or "").split(",") if k.strip()]
+                        centros_match = [c for c in por_centro_pct if any(kw in c.lower() for kw in kw_list)]
+                        if centros_match:
+                            pct_etapa = sum(por_centro_pct[c] for c in centros_match) / len(centros_match)
+                        else:
+                            pct_etapa = 0.0
+                        piezas_equivalentes = pct_etapa * proyecto["cantidad_total"]
+                        upsert_avance_etapa(conn, et["etapa_id"], piezas_equivalentes, hoy)
+                        resumen_sync.append((et["etapa"], f"{pct_etapa*100:.0f}%"))
+                    conn.commit()
+                    st.success("Avance aplicado a las etapas según el checklist de Odoo.")
+                    st.dataframe(pd.DataFrame(resumen_sync, columns=["Etapa", "% aplicado"]),
+                                 hide_index=True, use_container_width=True)
+                    st.rerun()
             except Exception as e:
-                st.error(f"No se pudo sincronizar: {e}")
+                st.error(f"No se pudo consultar Odoo: {e}")
 
 # ---------------------------------------------------------------------------
 # Dashboard
