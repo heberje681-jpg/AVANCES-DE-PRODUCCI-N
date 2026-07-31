@@ -8,6 +8,7 @@ Pintura...), no por material — los materiales son solo la lista de
 insumos que se necesitan (referencia), no algo que "avanza" por etapa.
 """
 import base64
+import os
 import sqlite3
 from datetime import date
 
@@ -173,7 +174,8 @@ def gauge(valor, titulo):
 # Página + identidad visual Marva (azul marino + dorado grano)
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="MARVA · Avance de Producción", layout="wide", page_icon="🌾")
+_icono_pagina = "marva_logo.png" if os.path.exists("marva_logo.png") else "🌾"
+st.set_page_config(page_title="MARVA · Avance de Producción", layout="wide", page_icon=_icono_pagina)
 conn = init_db()
 
 st.markdown("""
