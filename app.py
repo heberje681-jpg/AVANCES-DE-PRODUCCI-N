@@ -102,10 +102,10 @@ def _migrar_columnas_faltantes(conn):
 
 # Etapas por default según el proceso real de Marva
 ETAPAS_DEFAULT = [
-    ("HABILITADO", 30, "excalibur,pantografo,metalero,roladora,dobladora,sierra,taladro,cizalla,tarraja"),
-    ("ARMADO", 20, "armado,puntear"),
-    ("SOLDADURA", 30, "soldadora,soldadura"),
-    ("PINTURA", 20, "pintura,preparacion,fondo"),
+    ("HABILITADO", 30, "EXCALIBUR,PANTOGRAFO,METALERO,ROLADORA,DOBLADORA,SIERRA,TALADRO,CIZALLA,TARRAJA"),
+    ("ARMADO", 20, "ARMADO,PUNTEAR"),
+    ("SOLDADURA", 30, "SOLDADORA,SOLDADURA"),
+    ("PINTURA", 20, "PINTURA,PREPARACION,FONDO"),
 ]
 
 
@@ -303,7 +303,7 @@ with st.sidebar.expander("➕ Nuevo proyecto / pieza", expanded=proyectos_df.emp
                 nuevo_id = cur.lastrowid
                 for i, (et_nombre, peso, keywords) in enumerate(ETAPAS_DEFAULT):
                     if ahogada and et_nombre == "PINTURA":
-                        et_nombre, keywords = "PINTURA (FONDO GRIS)", "fondo"
+                        et_nombre, keywords = "PINTURA (FONDO GRIS)", "FONDO"
                     conn.execute(
                         "INSERT INTO etapas (proyecto_id, nombre, peso, orden, keywords_odoo) VALUES (?,?,?,?,?)",
                         (nuevo_id, et_nombre, peso, i, keywords),
@@ -341,24 +341,51 @@ st.divider()
 
 with st.expander("⚙️ Etapas, pesos y centros de trabajo de Odoo"):
     st.caption(
-        "El peso % de cada etapa pondera el avance total. Las 'palabras clave' son los nombres (o "
-        "parte de ellos) de los centros de trabajo en Odoo que corresponden a esa etapa."
+        "El peso % de cada etapa pondera el avance total. Los 'centros de trabajo' son los nombres "
+        "(o parte de ellos) de las máquinas en Odoo que corresponden a esa etapa."
     )
     etapas_editable = etapas_avance[["etapa_id", "etapa", "peso", "keywords_odoo"]].rename(
         columns={"etapa_id": "id", "etapa": "nombre"}
     )
     etapas_editadas = st.data_editor(
-        etapas_editable, use_container_width=True, hide_index=True, disabled=["id"], key="etapas_editor"
+        etapas_editable,
+        use_container_width=True,
+        hide_index=True,
+        disabled=["id"],
+        column_order=["nombre", "peso", "keywords_odoo"],
+        column_config={
+            "nombre": st.column_config.TextColumn("Etapa", width="medium"),
+            "peso": st.column_config.NumberColumn(
+                "Peso %", min_value=0, max_value=100, step=1, format="%d%%"
+            ),
+            "keywords_odoo": st.column_config.TextColumn(
+                "Centros de trabajo en Odoo",
+                help="Separados por coma, ej: CIZALLA,SIERRA. La app busca este texto dentro del "
+                     "nombre del centro de trabajo (no importan mayúsculas/minúsculas).",
+                width="large",
+            ),
+        },
+        key="etapas_editor",
     )
+
+    suma_actual = etapas_editadas["peso"].sum()
+    if suma_actual > 100:
+        st.error(f"🔴 Suma actual: **{suma_actual:.0f}%** — te pasaste de 100%, ajusta antes de guardar.")
+    elif abs(suma_actual - 100) > 0.5:
+        st.warning(f"🟡 Suma actual: **{suma_actual:.0f}%** — debe sumar exactamente 100% para guardar.")
+    else:
+        st.success(f"🟢 Suma actual: **{suma_actual:.0f}%**")
+
     if st.button("Guardar etapas"):
-        suma = etapas_editadas["peso"].sum()
-        if abs(suma - 100) > 0.5:
-            st.error(f"Los pesos suman {suma:.0f}%, deben sumar 100%.")
+        if suma_actual > 100.5:
+            st.error(f"Los pesos suman {suma_actual:.0f}%, no pueden pasar de 100%.")
+        elif abs(suma_actual - 100) > 0.5:
+            st.error(f"Los pesos suman {suma_actual:.0f}%, deben sumar exactamente 100%.")
         else:
             for _, row in etapas_editadas.iterrows():
                 conn.execute(
                     "UPDATE etapas SET nombre=?, peso=?, keywords_odoo=? WHERE id=?",
-                    (row["nombre"], row["peso"], row["keywords_odoo"], int(row["id"])),
+                    (row["nombre"], row["peso"], (row["keywords_odoo"] or "").upper(), int(row["id"])),
                 )
             conn.commit()
             st.success("Etapas actualizadas.")
