@@ -7,6 +7,7 @@ hay que producir ya pasaron por Habilitado, Armado, Soldadura,
 Pintura...), no por material — los materiales son solo la lista de
 insumos que se necesitan (referencia), no algo que "avanza" por etapa.
 """
+import base64
 import sqlite3
 from datetime import date
 
@@ -154,7 +155,7 @@ def gauge(valor, titulo):
         number={"suffix": "%"},
         gauge={
             "axis": {"range": [0, 100]},
-            "bar": {"color": "#D9A441"},
+            "bar": {"color": "#2E7BC4"},
             "bgcolor": "#1D242B",
             "steps": [
                 {"range": [0, 50], "color": "#22303E"},
@@ -180,8 +181,8 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
 :root {
     --marva-bg: #0E1620; --marva-panel: #16202B; --marva-panel-2: #1C2733;
-    --marva-navy: #0F2A47; --marva-gold: #D9A441; --marva-text: #E8EDF1;
-    --marva-muted: #8C99A6; --marva-border: #263341;
+    --marva-navy: #00366C; --marva-accent: #2E7BC4; --marva-text: #E8EDF1;
+    --marva-muted: #8C99A6; --marva-border: #263341; --marva-black: #0A0A0A;
 }
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 h1, h2, h3, .marva-plate, .marva-plate * { font-family: 'Barlow Condensed', sans-serif; }
@@ -189,31 +190,57 @@ h1, h2, h3, .marva-plate, .marva-plate * { font-family: 'Barlow Condensed', sans
 section[data-testid="stSidebar"] { background-color: var(--marva-panel); border-right: 1px solid var(--marva-border); }
 .marva-plate {
     background: linear-gradient(120deg, #0F1B27 0%, #16202B 60%, #0F1B27 100%);
-    border: 1px solid var(--marva-border); border-left: 6px solid var(--marva-gold); border-radius: 6px;
+    border: 1px solid var(--marva-border); border-left: 6px solid var(--marva-accent); border-radius: 6px;
     padding: 16px 24px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between;
 }
 .marva-plate .brand-name { font-weight: 700; font-size: 28px; letter-spacing: 2px; color: var(--marva-text); }
-.marva-plate .brand-tag { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--marva-gold); margin-left: 12px; }
+.marva-plate .brand-tag { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--marva-accent); margin-left: 12px; }
 .marva-plate .brand-sub { font-family: 'Inter'; font-size: 13px; color: var(--marva-muted); }
 div[data-testid="stMetric"] {
     background-color: var(--marva-panel-2); border: 1px solid var(--marva-border); border-radius: 6px;
-    padding: 10px 14px 8px 14px; border-top: 3px solid var(--marva-gold);
+    padding: 10px 14px 8px 14px; border-top: 3px solid var(--marva-accent);
 }
 div[data-testid="stMetricLabel"] { color: var(--marva-muted) !important; text-transform: uppercase; letter-spacing: 1px; font-size: 12px !important; }
 div[data-testid="stMetricValue"] { color: var(--marva-text) !important; font-family: 'Barlow Condensed'; }
-.stButton > button { background-color: var(--marva-navy); color: white; border: 1px solid var(--marva-gold); border-radius: 5px; font-weight: 600; }
+.stButton > button { background-color: var(--marva-navy); color: white; border: 1px solid var(--marva-accent); border-radius: 5px; font-weight: 600; }
 .stButton > button:hover { background-color: #163756; color: white; }
-.stFormSubmitButton > button { background-color: var(--marva-gold); color: #14181C; border: none; font-weight: 700; }
+.stFormSubmitButton > button { background-color: var(--marva-accent); color: #14181C; border: none; font-weight: 700; }
 .stFormSubmitButton > button:hover { background-color: #C4933A; }
 div[data-testid="stExpander"] { background-color: var(--marva-panel-2); border: 1px solid var(--marva-border); border-radius: 6px; }
-div[data-testid="stProgress"] > div > div > div { background-color: var(--marva-gold) !important; }
+div[data-testid="stProgress"] > div > div > div { background-color: var(--marva-accent) !important; }
 hr { border-color: var(--marva-border); }
+
+/* --- Responsive: celular y pantallas angostas --- */
+@media (max-width: 680px) {
+    .block-container { padding-left: 0.8rem !important; padding-right: 0.8rem !important; padding-top: 1rem !important; }
+    div[data-testid="stHorizontalBlock"] { flex-direction: column; gap: 0.5rem !important; }
+    div[data-testid="stHorizontalBlock"] > div { width: 100% !important; min-width: 100% !important; }
+    .marva-plate { flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; }
+    .marva-plate .brand-name { font-size: 22px; }
+    .marva-plate .brand-tag { margin-left: 0; }
+    div[data-testid="stMetricValue"] { font-size: 20px !important; }
+    div[data-testid="stMetric"] { padding: 8px 10px 6px 10px; }
+    .stButton > button, .stFormSubmitButton > button { width: 100%; padding: 0.6rem; font-size: 15px; }
+    h2, h3 { font-size: 20px !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
+def _logo_html():
+    try:
+        with open("marva_logo.png", "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        return f'<img src="data:image/png;base64,{b64}" style="height:38px;margin-right:14px;">'
+    except FileNotFoundError:
+        return ""
+
+
+st.markdown(f"""
 <div class="marva-plate">
-    <div><span class="brand-name">MARVA</span><span class="brand-tag">Producción</span></div>
+    <div style="display:flex; align-items:center;">
+        {_logo_html()}
+        <div><span class="brand-name">MARVA</span><span class="brand-tag">Producción</span></div>
+    </div>
     <div class="brand-sub">Avance de fabricación · piso de planta</div>
 </div>
 """, unsafe_allow_html=True)
@@ -533,7 +560,7 @@ with dg2:
     fig_bar = go.Figure(go.Bar(
         x=etapas_avance["etapa"], y=etapas_avance["pct_etapa"] * 100,
         text=[f"{v:.1f}%" for v in etapas_avance["pct_etapa"] * 100],
-        textposition="outside", marker_color="#D9A441",
+        textposition="outside", marker_color="#2E7BC4",
     ))
     fig_bar.update_layout(yaxis_range=[0, 100], height=220, margin=dict(l=20, r=20, t=20, b=20),
                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EDF1")
