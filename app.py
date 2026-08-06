@@ -102,11 +102,28 @@ def _migrar_columnas_faltantes(conn):
 
 # Etapas por default según el proceso real de Marva
 ETAPAS_DEFAULT = [
-    ("HABILITADO", 30, "EXCALIBUR,PANTOGRAFO,METALERO,ROLADORA,DOBLADORA,SIERRA,TALADRO,CIZALLA,TARRAJA"),
-    ("ARMADO", 20, "ARMADO,PUNTEAR"),
-    ("SOLDADURA", 30, "SOLDADORA,SOLDADURA"),
+    ("HABILITADO", 30, "CORTE,DOBLEZ,ROSCA,BARREN,EXCALIBUR,PANTOGRAFO,METALERO,ROLADORA,DOBLADORA,SIERRA,TALADRO,CIZALLA,TARRAJA"),
+    ("ARMADO", 20, "ARMADO,PUNTEA,EMPATE"),
+    ("SOLDADURA", 30, "SOLDADURA COMPLETA,SOLDADORA"),
     ("PINTURA", 20, "PINTURA,PREPARACION,FONDO"),
 ]
+
+
+def _crear_proyecto_con_etapas(conn, nombre, cantidad_total, unidad, responsable, ahogada, mo_odoo=None):
+    cur = conn.execute(
+        "INSERT INTO proyectos (nombre, cantidad_total, unidad, fecha, responsable, mo_odoo) VALUES (?,?,?,?,?,?)",
+        (nombre, cantidad_total, unidad, str(date.today()), responsable, mo_odoo),
+    )
+    nuevo_id = cur.lastrowid
+    for i, (et_nombre, peso, keywords) in enumerate(ETAPAS_DEFAULT):
+        if ahogada and et_nombre == "PINTURA":
+            et_nombre, keywords = "PINTURA (FONDO GRIS)", "FONDO"
+        conn.execute(
+            "INSERT INTO etapas (proyecto_id, nombre, peso, orden, keywords_odoo) VALUES (?,?,?,?,?)",
+            (nuevo_id, et_nombre, peso, i, keywords),
+        )
+    conn.commit()
+    return nuevo_id
 
 
 def upsert_avance_etapa(conn, etapa_id, cantidad, fecha):
@@ -285,32 +302,65 @@ else:
     proyecto_id = st.sidebar.radio("Selecciona uno:", list(nombres.keys()), format_func=lambda x: nombres[x])
 
 with st.sidebar.expander("➕ Nuevo proyecto / pieza", expanded=proyectos_df.empty):
-    with st.form("nuevo_proyecto_form"):
-        nombre = st.text_input("Nombre de la pieza")
-        cantidad_total = st.number_input("Cantidad a producir (piezas)", min_value=0.0, step=1.0)
-        unidad = st.text_input("Unidad", value="pzas")
-        responsable = st.text_input("Responsable")
-        ahogada = st.checkbox("Pieza ahogada en concreto (pintura = solo fondo gris)")
+    tab_manual, tab_odoo = st.tabs(["Manual", "Desde Odoo"])
 
-        if st.form_submit_button("Crear proyecto"):
-            if not nombre or cantidad_total <= 0:
-                st.error("Falta nombre o cantidad a producir.")
+    with tab_manual:
+        with st.form("nuevo_proyecto_form"):
+            nombre = st.text_input("Nombre de la pieza")
+            cantidad_total = st.number_input("Cantidad a producir (piezas)", min_value=0.0, step=1.0)
+            unidad = st.text_input("Unidad", value="pzas")
+            responsable = st.text_input("Responsable")
+            ahogada = st.checkbox("Pieza ahogada en concreto (pintura = solo fondo gris)")
+
+            if st.form_submit_button("Crear proyecto"):
+                if not nombre or cantidad_total <= 0:
+                    st.error("Falta nombre o cantidad a producir.")
+                else:
+                    nuevo_id = _crear_proyecto_con_etapas(conn, nombre, cantidad_total, unidad, responsable, ahogada)
+                    st.success(f"'{nombre}' creado.")
+                    st.rerun()
+
+    with tab_odoo:
+        st.caption("Trae las Órdenes de Fabricación abiertas en Odoo — tú solo ajustas las ponderaciones después.")
+        if odoo.is_odoo_configured():
+            odoo_url_np, odoo_db_np, odoo_user_np, odoo_pass_np = odoo.get_credentials_from_secrets()
+        else:
+            st.warning("Configura tus credenciales de Odoo en Secrets, o en 'Materiales necesarios' de algún proyecto.")
+            odoo_url_np = odoo_db_np = odoo_user_np = odoo_pass_np = None
+
+        if st.button("🔄 Buscar órdenes abiertas en Odoo"):
+            if not (odoo_url_np and odoo_db_np and odoo_user_np and odoo_pass_np):
+                st.error("Faltan credenciales de Odoo.")
             else:
-                cur = conn.execute(
-                    "INSERT INTO proyectos (nombre, cantidad_total, unidad, fecha, responsable) VALUES (?,?,?,?,?)",
-                    (nombre, cantidad_total, unidad, str(date.today()), responsable),
-                )
-                nuevo_id = cur.lastrowid
-                for i, (et_nombre, peso, keywords) in enumerate(ETAPAS_DEFAULT):
-                    if ahogada and et_nombre == "PINTURA":
-                        et_nombre, keywords = "PINTURA (FONDO GRIS)", "FONDO"
-                    conn.execute(
-                        "INSERT INTO etapas (proyecto_id, nombre, peso, orden, keywords_odoo) VALUES (?,?,?,?,?)",
-                        (nuevo_id, et_nombre, peso, i, keywords),
+                try:
+                    st.session_state["odoo_ordenes_abiertas"] = odoo.fetch_ordenes_abiertas(
+                        odoo_url_np, odoo_db_np, odoo_user_np, odoo_pass_np
                     )
-                conn.commit()
-                st.success(f"'{nombre}' creado.")
+                except Exception as e:
+                    st.error(f"No se pudo consultar Odoo: {e}")
+
+        ordenes_disp = st.session_state.get("odoo_ordenes_abiertas", [])
+        # solo mostrar las que aun no se han importado como proyecto
+        ya_importadas = set(proyectos_df["mo_odoo"].dropna()) if "mo_odoo" in proyectos_df.columns else set()
+        ordenes_disp = [o for o in ordenes_disp if o["orden"] not in ya_importadas]
+
+        if ordenes_disp:
+            opciones_ordenes = {
+                f"{o['orden']} — {o['producto']} ({o['cantidad']:g} pzas) [{o['estado']}]": o
+                for o in ordenes_disp
+            }
+            seleccion_orden = st.selectbox("Orden a importar", list(opciones_ordenes.keys()), key="sel_orden_import")
+            ahogada_odoo = st.checkbox("Pieza ahogada en concreto (pintura = solo fondo gris)", key="ahogada_odoo")
+            if st.button("📥 Importar esta orden como proyecto"):
+                o = opciones_ordenes[seleccion_orden]
+                nuevo_id = _crear_proyecto_con_etapas(
+                    conn, o["producto"], o["cantidad"], "pzas", "", ahogada_odoo, mo_odoo=o["orden"]
+                )
+                st.success(f"'{o['producto']}' importado desde {o['orden']}.")
+                st.session_state.pop("odoo_ordenes_abiertas", None)
                 st.rerun()
+        elif "odoo_ordenes_abiertas" in st.session_state:
+            st.info("No hay órdenes nuevas por importar (o ya están todas en tus proyectos).")
 
 st.sidebar.caption("Base de datos local: avance.db (SQLite). Un solo archivo para todos los proyectos.")
 
@@ -515,7 +565,9 @@ with st.expander("🔄 Operaciones de Odoo (ver checklist / sincronizar avance)"
     st.caption(
         "Marva no captura cantidades por operación en Odoo, solo si cada estación ya se hizo o no "
         "(y no te deja pasar a la siguiente sin terminar la anterior). Esto trae ese checklist real, "
-        "y si quieres, reparte el % de cada etapa según cuántas de sus estaciones ya están hechas."
+        "y si quieres, reparte el % de cada etapa según cuántas de sus operaciones ya están hechas — "
+        "comparando primero por el nombre de la operación (más confiable) y solo usando la máquina "
+        "como respaldo si el nombre de la operación no dice nada."
     )
     if odoo.is_odoo_configured():
         odoo_url, odoo_db, odoo_user, odoo_pass = odoo.get_credentials_from_secrets()
@@ -542,38 +594,72 @@ with st.expander("🔄 Operaciones de Odoo (ver checklist / sincronizar avance)"
                 resultado = odoo.fetch_avance_por_centro(odoo_url, odoo_db, odoo_user, odoo_pass, mo_ref)
                 conn.execute("UPDATE proyectos SET mo_odoo = ? WHERE id = ?", (mo_ref, proyecto_id))
                 conn.commit()
-
-                st.markdown(f"**Orden: {resultado['orden']}**")
-                ops_df = pd.DataFrame(resultado["operaciones"])[["operacion", "centro", "estado"]]
-                ops_df["estado"] = ops_df["estado"].map(
-                    {"done": "✅ Hecha", "progress": "🔧 En proceso", "ready": "⏳ Pendiente", "pending": "⏳ Pendiente"}
-                ).fillna(ops_df["estado"])
-                st.dataframe(
-                    ops_df.rename(columns={"operacion": "Operación", "centro": "Centro de trabajo", "estado": "Estado"}),
-                    hide_index=True, use_container_width=True,
-                )
+                # se guarda en session_state para que la tabla no desaparezca tras el rerun de "sincronizar"
+                st.session_state[f"odoo_checklist_{proyecto_id}"] = resultado
 
                 if sincronizar:
-                    por_centro_pct = resultado["por_centro_pct"]
                     hoy = str(date.today())
+                    kw_por_etapa = {
+                        et["etapa_id"]: [k.strip().lower() for k in (et["keywords_odoo"] or "").split(",") if k.strip()]
+                        for et in etapas
+                    }
+                    ops_por_etapa = {et["etapa_id"]: [] for et in etapas}
+
+                    for op in resultado["operaciones"]:
+                        etapa_asignada = None
+                        # 1) primero compara contra el NOMBRE DE LA OPERACIÓN en todas las etapas
+                        # (más confiable: dice literalmente "empate"/"punteado"/"soldadura completa")
+                        for et in etapas:
+                            if any(kw in op["operacion"].lower() for kw in kw_por_etapa[et["etapa_id"]]):
+                                etapa_asignada = et["etapa_id"]
+                                break
+                        # 2) si ninguna etapa matcheó por nombre de operación, cae al nombre de la máquina
+                        if etapa_asignada is None:
+                            for et in etapas:
+                                if any(kw in op["centro"].lower() for kw in kw_por_etapa[et["etapa_id"]]):
+                                    etapa_asignada = et["etapa_id"]
+                                    break
+                        if etapa_asignada is not None:
+                            ops_por_etapa[etapa_asignada].append(op)
+
                     resumen_sync = []
                     for et in etapas:
-                        kw_list = [k.strip().lower() for k in (et["keywords_odoo"] or "").split(",") if k.strip()]
-                        centros_match = [c for c in por_centro_pct if any(kw in c.lower() for kw in kw_list)]
-                        if centros_match:
-                            pct_etapa = sum(por_centro_pct[c] for c in centros_match) / len(centros_match)
-                        else:
-                            pct_etapa = 0.0
+                        matches = ops_por_etapa[et["etapa_id"]]
+                        pct_etapa = (sum(1 for op in matches if op["hecha"]) / len(matches)) if matches else 0.0
                         piezas_equivalentes = pct_etapa * proyecto["cantidad_total"]
                         upsert_avance_etapa(conn, et["etapa_id"], piezas_equivalentes, hoy)
-                        resumen_sync.append((et["etapa"], f"{pct_etapa*100:.0f}%"))
+                        resumen_sync.append((et["etapa"], f"{pct_etapa*100:.0f}%", len(matches)))
                     conn.commit()
-                    st.success("Avance aplicado a las etapas según el checklist de Odoo.")
-                    st.dataframe(pd.DataFrame(resumen_sync, columns=["Etapa", "% aplicado"]),
-                                 hide_index=True, use_container_width=True)
+                    st.session_state[f"odoo_sync_resumen_{proyecto_id}"] = resumen_sync
+                    # Los campos de captura manual de abajo guardan su propio valor en memoria
+                    # (session_state) y no lo vuelven a leer de la base solos — hay que limpiarlos
+                    # a fuerza para que muestren lo recién sincronizado en vez del valor viejo.
+                    for et in etapas:
+                        st.session_state.pop(f"avance_{et['etapa_id']}", None)
                     st.rerun()
             except Exception as e:
                 st.error(f"No se pudo consultar Odoo: {e}")
+
+    # Se muestra desde session_state (sobrevive al rerun de "sincronizar")
+    if st.session_state.get(f"odoo_checklist_{proyecto_id}"):
+        resultado = st.session_state[f"odoo_checklist_{proyecto_id}"]
+        st.markdown(f"**Orden: {resultado['orden']}**")
+        ops_df = pd.DataFrame(resultado["operaciones"])[["operacion", "centro", "estado"]]
+        ops_df["estado"] = ops_df["estado"].map({
+            "done": "✅ Hecha", "progress": "🔧 En proceso", "ready": "⏳ Lista",
+            "pending": "⏳ Pendiente", "waiting": "⏳ Esperando", "blocked": "🚫 Bloqueada",
+            "cancel": "❌ Cancelada",
+        }).fillna(ops_df["estado"])
+        st.dataframe(
+            ops_df.rename(columns={"operacion": "Operación", "centro": "Centro de trabajo", "estado": "Estado"}),
+            hide_index=True, use_container_width=True,
+        )
+        if st.session_state.get(f"odoo_sync_resumen_{proyecto_id}"):
+            st.success("Avance aplicado a las etapas según el checklist de Odoo.")
+            st.dataframe(
+                pd.DataFrame(st.session_state[f"odoo_sync_resumen_{proyecto_id}"], columns=["Etapa", "% aplicado", "Operaciones consideradas"]),
+                hide_index=True, use_container_width=True,
+            )
 
 # ---------------------------------------------------------------------------
 # Dashboard
@@ -584,7 +670,8 @@ st.subheader("Dashboard")
 
 dg1, dg2 = st.columns([1, 2])
 with dg1:
-    st.plotly_chart(gauge(pct_total, "Avance total"), use_container_width=True)
+    st.plotly_chart(gauge(pct_total, "Avance total"), use_container_width=True,
+                     key=f"gauge_{proyecto_id}_{round(pct_total, 4)}")
 with dg2:
     fig_bar = go.Figure(go.Bar(
         x=etapas_avance["etapa"], y=etapas_avance["pct_etapa"] * 100,
@@ -593,7 +680,7 @@ with dg2:
     ))
     fig_bar.update_layout(yaxis_range=[0, 100], height=220, margin=dict(l=20, r=20, t=20, b=20),
                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#E8EDF1")
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, use_container_width=True, key=f"barras_{proyecto_id}_{round(pct_total, 4)}")
 
 faltante = proyecto["cantidad_total"] * (1 - pct_total)
 st.metric("Piezas equivalentes que faltan (ponderado)", f"{faltante:.1f} {proyecto['unidad']}")
