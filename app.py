@@ -538,17 +538,14 @@ st.caption(f"De {proyecto['cantidad_total']:g} {proyecto['unidad']} a producir, 
 with st.form("captura_avance_form"):
     valores_nuevos = {}
     for et in etapas:
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            valores_nuevos[et["etapa_id"]] = st.number_input(
-                f"{et['etapa']} (peso {et['peso']:.0f}%)",
-                min_value=0.0, max_value=float(proyecto["cantidad_total"]),
-                value=float(et["cantidad_avanzada"]), step=1.0,
-                key=f"avance_{et['etapa_id']}",
-            )
-        with col2:
-            pct_et = min(valores_nuevos[et["etapa_id"]] / proyecto["cantidad_total"], 1.0) * 100 if proyecto["cantidad_total"] else 0
-            st.metric("% etapa", f"{pct_et:.0f}%", label_visibility="collapsed")
+        valores_nuevos[et["etapa_id"]] = st.number_input(
+            f"{et['etapa']} (peso {et['peso']:.0f}%)",
+            min_value=0.0, max_value=float(proyecto["cantidad_total"]),
+            value=float(et["cantidad_avanzada"]), step=1.0,
+            key=f"avance_{et['etapa_id']}",
+        )
+        pct_et = min(valores_nuevos[et["etapa_id"]] / proyecto["cantidad_total"], 1.0) * 100 if proyecto["cantidad_total"] else 0
+        st.caption(f"→ {pct_et:.0f}% de esta etapa")
 
     if st.form_submit_button("💾 Guardar avance"):
         hoy = str(date.today())
