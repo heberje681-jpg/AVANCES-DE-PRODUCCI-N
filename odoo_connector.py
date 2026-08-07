@@ -85,12 +85,13 @@ def fetch_bom_from_odoo(url: str, db: str, user: str, password: str, codigo_prod
     models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
 
     codigo, nombre = _parse_codigo_y_nombre(codigo_producto)
+    ctx = {"active_test": False}  # incluye productos archivados/inactivos en la búsqueda
 
     # 1) intento por código exacto (lo que aparece entre corchetes en Odoo, ej. ACST35)
     productos = models.execute_kw(
         db, uid, password, "product.product", "search_read",
         [[["default_code", "=", codigo]]],
-        {"fields": ["id", "name", "default_code", "product_tmpl_id"], "limit": 5},
+        {"fields": ["id", "name", "default_code", "product_tmpl_id"], "limit": 5, "context": ctx},
     )
 
     # 2) si no hubo match exacto por código, busca por nombre (contiene el texto)
@@ -98,13 +99,24 @@ def fetch_bom_from_odoo(url: str, db: str, user: str, password: str, codigo_prod
         productos = models.execute_kw(
             db, uid, password, "product.product", "search_read",
             [[["name", "ilike", nombre]]],
-            {"fields": ["id", "name", "default_code", "product_tmpl_id"], "limit": 5},
+            {"fields": ["id", "name", "default_code", "product_tmpl_id"], "limit": 5, "context": ctx},
+        )
+
+    # 3) ultimo intento: solo la palabra mas distintiva del nombre (la mas larga),
+    # por si hay diferencias de acentos/espacios en el resto del texto
+    if not productos and nombre:
+        palabra_clave = max(nombre.split(), key=len)
+        productos = models.execute_kw(
+            db, uid, password, "product.product", "search_read",
+            [[["name", "ilike", palabra_clave]]],
+            {"fields": ["id", "name", "default_code", "product_tmpl_id"], "limit": 5, "context": ctx},
         )
 
     if not productos:
         raise ValueError(
-            f"No se encontró ningún producto con código o nombre '{codigo_producto}'. "
-            "Revisa que esté escrito igual que en Odoo (el código va entre corchetes, ej. ACST35)."
+            f"No se encontró ningún producto con código o nombre '{codigo_producto}' (probé incluso con "
+            "productos archivados). Puede que el producto no exista con ese código exacto en Odoo — "
+            "verifícalo abriendo la ficha del producto ahí y confirmando el código entre corchetes."
         )
 
     if len(productos) > 1:
@@ -220,23 +232,45 @@ def fetch_avance_por_centro(url: str, db: str, user: str, password: str, orden_r
         for wo in workorders
     ]
 
-    por_centro_total = {}
-    por_centro_hechas = {}
-    for op in operaciones:
-        centro = op["centro"]
-        por_centro_total[centro] = por_centro_total.get(centro, 0) + 1
-        if op["hecha"]:
-            por_centro_hechas[centro] = por_centro_hechas.get(centro, 0) + 1
-
-    # fraccion de operaciones terminadas por centro (0 a 1)
-    por_centro_pct = {
-        centro: por_centro_hechas.get(centro, 0) / total
-        for centro, total in por_centro_total.items()
-    }
-
     return {
         "orden": orden["name"],
         "cantidad_total": orden["product_qty"],
         "operaciones": operaciones,
-        "por_centro_pct": por_centro_pct,
     }
+
+
+def fetch_ordenes_abiertas(url: str, db: str, user: str, password: str, limite: int = 25):
+    """Trae las Ordenes de Fabricacion recientes que no esten canceladas,
+    para poder crear un proyecto en la app con un click en vez de capturar
+    todo a mano.
+
+    Regresa una lista de dicts: [{"orden", "producto", "cantidad", "estado"}, ...]
+    ordenada de la mas reciente a la mas vieja.
+    """
+    common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
+    uid = common.authenticate(db, user, password, {})
+    if not uid:
+        raise ValueError("No se pudo autenticar en Odoo. Revisa las credenciales.")
+
+    models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
+
+    ordenes = models.execute_kw(
+        db, uid, password, "mrp.production", "search_read",
+        [[["state", "!=", "cancel"]]],
+        {"fields": ["name", "product_id", "product_qty", "state"], "order": "id desc", "limit": limite},
+    )
+
+    ESTADOS = {
+        "draft": "Borrador", "confirmed": "Confirmada", "planned": "Planeada",
+        "progress": "En proceso", "to_close": "Por cerrar", "done": "Terminada",
+    }
+
+    return [
+        {
+            "orden": o["name"],
+            "producto": o["product_id"][1] if o.get("product_id") else "Sin producto",
+            "cantidad": o["product_qty"],
+            "estado": ESTADOS.get(o.get("state"), o.get("state")),
+        }
+        for o in ordenes
+    ]
