@@ -240,9 +240,9 @@ def fetch_avance_por_centro(url: str, db: str, user: str, password: str, orden_r
 
 
 def fetch_ordenes_abiertas(url: str, db: str, user: str, password: str, limite: int = 25):
-    """Trae las Ordenes de Fabricacion recientes que no esten canceladas,
-    para poder crear un proyecto en la app con un click en vez de capturar
-    todo a mano.
+    """Trae las Ordenes de Fabricacion que siguen ABIERTAS (ni terminadas ni
+    canceladas), para poder crear un proyecto en la app con un click en vez
+    de capturar todo a mano.
 
     Regresa una lista de dicts: [{"orden", "producto", "cantidad", "estado"}, ...]
     ordenada de la mas reciente a la mas vieja.
@@ -256,7 +256,7 @@ def fetch_ordenes_abiertas(url: str, db: str, user: str, password: str, limite: 
 
     ordenes = models.execute_kw(
         db, uid, password, "mrp.production", "search_read",
-        [[["state", "!=", "cancel"]]],
+        [[["state", "not in", ["done", "cancel"]]]],
         {"fields": ["name", "product_id", "product_qty", "state"], "order": "id desc", "limit": limite},
     )
 
